@@ -382,28 +382,39 @@ window.enterLiveModeAndGo = function(target){
 };
 
 // ══════════════════════════════════════════════════════════
-// SUIVI LIVE GLOBAL — actif dès le chargement de la page, AVANT toute
-// connexion. Permet à un visiteur sans compte de voir l'accès live
-// s'ouvrir automatiquement (overlay qui se ferme tout seul, et qui
-// enchaîne directement sur la page demandée) dès que l'admin bascule
-// liveOpen, sans avoir à recharger la page ni recliquer. La lecture est
-// autorisée sans authentification par la règle Firestore
-// `resource.data.liveOpen == true` sur foottournoi/current.
+// SUIVI LIVE GLOBAL — détecte le passage liveOpen:false -> true et, si un
+// visiteur attendait sur l'overlay "live fermé" (cible mémorisée dans
+// pendingSpecTarget), l'embarque automatiquement vers la page demandée.
+// Appelée depuis startLiveWatch (écran de login) ET depuis
+// subscribeToTournament (une fois déjà dans l'app), pour que ça marche
+// quel que soit l'endroit où l'utilisateur se trouve quand l'admin ouvre
+// le live.
 // ══════════════════════════════════════════════════════════
+function handleLiveOpenChange(nowOpen){
+  const wasOpen = ST.liveOpen;
+  ST.liveOpen = nowOpen;
+  if(!wasOpen && ST.liveOpen && pendingSpecTarget !== null){
+    const overlay = document.getElementById('liveClosedOverlay');
+    if(overlay) overlay.style.display = 'none';
+    const target = pendingSpecTarget;
+    pendingSpecTarget = null;
+    if(USER_ROLE === 'spectator'){
+      // Déjà dans l'app (overlay déclenché via spectatorGoLive) : on navigue simplement.
+      if(target === 'R') toggleRules();
+      else goTo(target === 'T' ? 'T' : target);
+    } else {
+      // Encore sur l'écran de login (overlay déclenché via enterLiveModeAndGo).
+      enterLiveModeAndGo(target);
+    }
+  }
+}
+
 let unsubLiveWatch = null;
 function startLiveWatch(){
   if(unsubLiveWatch) return; // déjà actif (ex: via subscribeToTournament)
   unsubLiveWatch = onSnapshot(doc(db,'foottournoi','current'), (snap)=>{
     if(!snap.exists()) return;
-    const wasOpen = ST.liveOpen;
-    ST.liveOpen = snap.data().liveOpen === true;
-    if(!wasOpen && ST.liveOpen && pendingSpecTarget !== null){
-      const overlay = document.getElementById('liveClosedOverlay');
-      if(overlay) overlay.style.display = 'none';
-      const target = pendingSpecTarget;
-      pendingSpecTarget = null;
-      enterLiveModeAndGo(target);
-    }
+    handleLiveOpenChange(snap.data().liveOpen === true);
   }, (e)=>{ console.warn('startLiveWatch', e); });
 }
 startLiveWatch();
@@ -429,7 +440,7 @@ function subscribeToTournament(){
     ST.bracketBreaks    = data.bracketBreaks || [];
     if(data.results)         ST.results         = data.results;
     if(data.phase)           ST.phase           = data.phase;
-    ST.liveOpen = data.liveOpen === true;
+    handleLiveOpenChange(data.liveOpen === true);
     refreshCurrentPage();
   });
 }
@@ -1133,6 +1144,7 @@ window.goTo = function(n){
 };
 window.spectatorGoLive = function(n){
   if(n!=='R' && isLiveBlocked()){
+    pendingSpecTarget = n;
     const overlay = document.getElementById('liveClosedOverlay');
     if(overlay) overlay.style.display='flex';
     return;
