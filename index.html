@@ -1243,15 +1243,13 @@ window.toggleAdminPanel = function(){
 window.toggleLiveOpen = async function(){
   if(!isAdmin()) return;
   const newVal = !ST.liveOpen;
+  // Mise à jour optimiste locale : handleLiveOpenChange() sera aussi appelé
+  // par le onSnapshot Firestore en retour (sur tous les autres appareils),
+  // mais on l'appelle ici immédiatement pour que l'admin voie le changement
+  // sans délai. Le getDoc post-save était peu fiable : Firestore peut renvoyer
+  // l'ancienne valeur si la propagation n'est pas encore faite.
+  handleLiveOpenChange(newVal);
   await saveTournament({ liveOpen: newVal });
-  // On ne modifie pas ST.liveOpen ici : handleLiveOpenChange() sera appelé
-  // par le onSnapshot en retour, ce qui met à jour ST.liveOpen et le bouton
-  // de façon cohérente sur tous les appareils (y compris celui de l'admin).
-  // Pour éviter un délai perçu côté admin, on lit immédiatement depuis Firestore.
-  try {
-    const snap = await getDoc(doc(db,'foottournoi','current'));
-    if(snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
-  } catch(e){ handleLiveOpenChange(newVal); } // fallback si réseau KO
 };
 function updateLiveToggleBtn(){
   const btn=document.getElementById('liveToggleBtn');
