@@ -403,6 +403,7 @@ window.enterLiveModeAndGo = function(target){
 function handleLiveOpenChange(nowOpen){
   const wasOpen = ST.liveOpen;
   ST.liveOpen = nowOpen;
+  updateLiveToggleBtn(); // reflète le nouvel état sur le bouton du panneau admin, sur tous les appareils
   if(!wasOpen && ST.liveOpen && pendingSpecTarget !== null){
     const overlay = document.getElementById('liveClosedOverlay');
     if(overlay) overlay.style.display = 'none';
@@ -428,6 +429,22 @@ function startLiveWatch(){
   }, (e)=>{ console.warn('startLiveWatch', e); });
 }
 startLiveWatch();
+
+// ══════════════════════════════════════════════════════════
+// RESYNCHRONISATION AU RETOUR D'ARRIÈRE-PLAN (mobile) — sur mobile,
+// quand l'écran s'éteint ou que le navigateur passe en arrière-plan, la
+// connexion réseau du listener temps réel Firestore est souvent coupée par
+// l'OS pour économiser la batterie. Le SDK est censé se reconnecter seul,
+// mais ça reste peu fiable en pratique : on force donc une lecture fraîche
+// de liveOpen dès que l'onglet redevient visible, sans attendre le listener.
+// ══════════════════════════════════════════════════════════
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState !== 'visible') return;
+  try {
+    const snap = await getDoc(doc(db,'foottournoi','current'));
+    if(snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
+  } catch(e){ console.warn('resync visibilitychange', e); }
+});
 
 // ══════════════════════════════════════════════════════════
 // PERSISTANCE FIRESTORE — doc unique 'foottournoi/current'
