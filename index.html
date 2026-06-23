@@ -450,12 +450,14 @@ async function saveTournament(partial){
   catch(e){ console.error('saveTournament', e); alert('Erreur de sauvegarde : '+e.message); }
 }
 function refreshCurrentPage(){
+  if(ST.page===1) renderCfgForm();
   if(ST.page===2) renderTeamsPage();
   if(ST.page===3) renderPlanningPreview();
   if(ST.page===4) renderTournamentPage();
   if(ST.page===5) renderFinalPage();
   if(ST.page==='T') renderTeamsSpecPage();
   if(ST.page==='M') renderManagerPage();
+  updateLiveToggleBtn(); // le panneau admin (bouton live) est visible en permanence, pas lié à ST.page
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1445,6 +1447,12 @@ function getCfg(){
   };
 }
 function renderCfgForm(){
+  // Si l'utilisateur est en train de taper dans un champ de cette page,
+  // on ne réécrit pas par-dessus (évite d'effacer une saisie en cours
+  // suite à une mise à jour reçue depuis l'autre appareil).
+  const cfgFormEl = document.getElementById('page1');
+  if(cfgFormEl && cfgFormEl.contains(document.activeElement) &&
+     ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)) return;
   const c = ST.cfg;
   const setV=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=v; };
   setV('cfg_n', c.n);
