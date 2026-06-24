@@ -969,10 +969,28 @@ window.generateBracket = function(){
   const lastPoolTime = ST.poolTabSlot ? ST.poolTabSlot.time
     : (ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length-1].time : cfg.start);
 
-  // Coupures déjà consommées pendant les poules (calculé tôt, car on en a
-  // besoin avant de fixer le départ de la finale — voir juste après).
-  const poolTimesForApplied = ST.poolSchedule.map(m=>m.time).concat(ST.poolTabSlot?[ST.poolTabSlot.time]:[]);
-  const appliedBreaks = appliedBreaksFromSchedule(poolTimesForApplied, cfg.breaks);
+  // Coupures réellement insérées pendant les poules : on utilise ST.poolBreaks
+  // comme source de vérité plutôt que appliedBreaksFromSchedule().
+  // appliedBreaksFromSchedule() marque une coupure comme "appliquée" dès que
+  // son heure <= lastSlotMin, même si elle n'a PAS été réellement insérée
+  // (cas typique : pause à 12h00, TAB aussi à 12h00 → marquée "appliquée"
+  // alors qu'elle ne l'est pas, et donc ignorée pour la finale).
+  const appliedBreaks = new Set(
+    (ST.poolBreaks||[]).map(b=>b.startTime
+      ? (cfg.breaks||[]).find(c=>{ // retrouve la clé time_duration depuis le label/durée
+          const endM = b.startTime ? null : null; // on cherche par durée + label
+          return c.duration===b.duration && (c.label||'Coupure')===(b.label||'Coupure');
+        })
+      : null
+    ).filter(Boolean).map(c=>c.time+'_'+c.duration)
+  );
+  // Méthode plus fiable : reconstruire la clé depuis les breaks config en
+  // comparant durée + label avec ce qui a été inséré dans poolBreaks.
+  const appliedBreaksReliable = new Set();
+  (ST.poolBreaks||[]).forEach(pb=>{
+    const matched = (cfg.breaks||[]).find(c=>c.duration===pb.duration && (c.label||'Coupure')===(pb.label||'Coupure'));
+    if(matched) appliedBreaksReliable.add(matched.time+'_'+matched.duration);
+  });
 
   // ⚠️ Une coupure (ex. pause déjeuner) peut tomber exactement dans la
   // fenêtre de transition entre la fin des poules et le départ "naturel" de
@@ -990,10 +1008,13 @@ window.generateBracket = function(){
     const pending = (cfg.breaks||[]).slice().sort((a,b)=>timeToMinutes(a.time)-timeToMinutes(b.time));
     for(const brk of pending){
       const key = brk.time+'_'+brk.duration;
-      if(appliedBreaks.has(key)) continue;
+      if(appliedBreaksReliable.has(key)) continue; // utilise la liste fiable
       const brkMin = timeToMinutes(brk.time);
+      // La coupure doit tomber dans la fenêtre [fin des poules, début estimé finale[
+      // OU être configurée à une heure <= fin des poules mais pas encore insérée
+      // (cas : pause à 12h00 avec TAB aussi à 12h00).
       if(brkMin>=lastPoolMin && brkMin<startMin){
-        appliedBreaks.add(key);
+        appliedBreaksReliable.add(key);
         const fmt = mins => { const hh=Math.floor(mins/60)%24, mm=mins%60; return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'); };
         const endMin = startMin + brk.duration;
         transitionBreaks.push({ afterSlot: ST.poolTabSlot?ST.poolTabSlot.slot:-1, startTime: fmt(startMin), endTime: fmt(endMin), label: brk.label||'Coupure', duration: brk.duration });
@@ -1076,7 +1097,7 @@ window.generateBracket = function(){
   // (Les coupures déjà consommées pendant les poules, et celle éventuelle de
   // la fenêtre de transition, ont déjà été retirées de `appliedBreaks`
   // ci-dessus — on poursuit simplement la timeline sur la phase finale.)
-  const { times: slotTimes, insertedBreaks } = computeSlotTimes(start, slotDurations, totalSlots, cfg.breaks, appliedBreaks);
+  const { times: slotTimes, insertedBreaks } = computeSlotTimes(start, slotDurations, totalSlots, cfg.breaks, appliedBreaksReliable);
 
   const schedule = rawSchedule.map(m=>({ ...m, time: slotTimes[m.slot] }));
   const tabSlotsWithTime = tabSlots.map(t=>({ ...t, time: slotTimes[t.slot] }));
