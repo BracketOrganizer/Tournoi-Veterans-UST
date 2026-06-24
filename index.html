@@ -1022,12 +1022,17 @@ window.generateBracket = function(){
       startMin = pauseEnd;
     }
   }
-  let start = fmt(startMin);
-  // ── DEBUG ──
-  console.log('appliedBreaksReliable:', [...appliedBreaksReliable]);
-  console.log('transitionBreaks:', JSON.stringify(transitionBreaks));
-  console.log('start finale:', start);
-  // ──────────
+  // start = fin de la dernière pause qui couvre la fenêtre de transition,
+  // qu'elle soit dans poolBreaks (insérée pendant les poules) ou dans
+  // transitionBreaks (insérée ci-dessus). On prend le max entre naturalStartMin
+  // et la fin de toutes les pauses déjà connues qui tombent après lastPoolEndMin.
+  const allKnownBreaks = [...(ST.poolBreaks||[]), ...transitionBreaks];
+  const latestBreakEnd = allKnownBreaks
+    .filter(b => timeToMinutes(b.startTime) >= lastPoolEndMin - tabDurMin)
+    .reduce((max, b) => Math.max(max, timeToMinutes(b.endTime)), naturalStartMin);
+  let start = fmt(latestBreakEnd + cfg.tt);
+  console.log('allKnownBreaks fin max:', fmt(latestBreakEnd), '→ start finale:', start);
+
   // Ces coupures de transition se rattachent visuellement à la fin des
   // poules (juste après le créneau T.A.B.) : on les ajoute à ST.poolBreaks
   // pour qu'elles s'affichent au même endroit que les autres coupures de
