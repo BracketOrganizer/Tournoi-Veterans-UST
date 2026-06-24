@@ -964,61 +964,50 @@ window.generateBracket = function(){
   const matchSlotDur = cfg.matchDurBracket+cfg.tt;
   const tabDur = cfg.tabDuration||10;
 
-  // Départ de la phase finale = juste après le dernier créneau de poules
-  // (TAB de poule inclus), en continuité de la même timeline.
+  // Départ de la phase finale = fin du TAB de poule + transition.
+  // lastPoolTime = heure de DÉBUT du TAB → on ajoute tabDuration pour avoir
+  // la fin du TAB, puis tt pour la transition.
+  const tabDurMin = cfg.tabDuration||10;
   const lastPoolTime = ST.poolTabSlot ? ST.poolTabSlot.time
     : (ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length-1].time : cfg.start);
+  // fin réelle du dernier créneau de poules (fin du TAB)
+  const lastPoolEndMin = timeToMinutes(lastPoolTime) + tabDurMin;
 
-  // Coupures réellement insérées pendant les poules : on utilise ST.poolBreaks
-  // comme source de vérité plutôt que appliedBreaksFromSchedule().
-  // appliedBreaksFromSchedule() marque une coupure comme "appliquée" dès que
-  // son heure <= lastSlotMin, même si elle n'a PAS été réellement insérée
-  // (cas typique : pause à 12h00, TAB aussi à 12h00 → marquée "appliquée"
-  // alors qu'elle ne l'est pas, et donc ignorée pour la finale).
-  const appliedBreaks = new Set(
-    (ST.poolBreaks||[]).map(b=>b.startTime
-      ? (cfg.breaks||[]).find(c=>{ // retrouve la clé time_duration depuis le label/durée
-          const endM = b.startTime ? null : null; // on cherche par durée + label
-          return c.duration===b.duration && (c.label||'Coupure')===(b.label||'Coupure');
-        })
-      : null
-    ).filter(Boolean).map(c=>c.time+'_'+c.duration)
-  );
-  // Méthode plus fiable : reconstruire la clé depuis les breaks config en
-  // comparant durée + label avec ce qui a été inséré dans poolBreaks.
+  // Coupures réellement insérées pendant les poules = source de vérité.
+  // On reconstruit la clé time_duration depuis cfg.breaks en comparant
+  // durée + label (les seuls champs conservés dans poolBreaks).
   const appliedBreaksReliable = new Set();
   (ST.poolBreaks||[]).forEach(pb=>{
     const matched = (cfg.breaks||[]).find(c=>c.duration===pb.duration && (c.label||'Coupure')===(pb.label||'Coupure'));
     if(matched) appliedBreaksReliable.add(matched.time+'_'+matched.duration);
   });
 
-  // ⚠️ Une coupure (ex. pause déjeuner) peut tomber exactement dans la
-  // fenêtre de transition entre la fin des poules et le départ "naturel" de
-  // la finale (= lastPoolTime + 1 créneau). Sans ce contrôle, une telle
-  // coupure ne serait JAMAIS comptabilisée : trop tard pour le planning des
-  // poules (après son dernier créneau), mais déjà "dans le passé" au moment
-  // où démarre le calcul du planning de la finale. On la détecte et on
-  // l'insère ici, en décalant le départ de la finale en conséquence.
-  let start = addMinutes(lastPoolTime, cfg.matchDur+cfg.tt);
+  // Fenêtre de transition : coupures dont l'heure tombe entre la fin du TAB
+  // et le début estimé de la finale. On les insère ici en décalant start.
+  // La borne basse est lastPoolEndMin (fin TAB), pas lastPoolTime (début TAB)
+  // — correction du bug : une pause à 12h00 avec TAB débutant à 12h00 mais
+  // se terminant à 12h15 doit être détectée dans cette fenêtre.
+  let start = addMinutes(lastPoolTime, tabDurMin + cfg.tt);
   const transitionBreaks = [];
   let scanning = true;
   while(scanning){
     scanning = false;
-    const lastPoolMin = timeToMinutes(lastPoolTime), startMin = timeToMinutes(start);
+    const startMin = timeToMinutes(start);
     const pending = (cfg.breaks||[]).slice().sort((a,b)=>timeToMinutes(a.time)-timeToMinutes(b.time));
     for(const brk of pending){
       const key = brk.time+'_'+brk.duration;
-      if(appliedBreaksReliable.has(key)) continue; // utilise la liste fiable
+      if(appliedBreaksReliable.has(key)) continue;
       const brkMin = timeToMinutes(brk.time);
-      // La coupure doit tomber dans la fenêtre [fin des poules, début estimé finale[
-      // OU être configurée à une heure <= fin des poules mais pas encore insérée
-      // (cas : pause à 12h00 avec TAB aussi à 12h00).
-      if(brkMin>=lastPoolMin && brkMin<startMin){
+      // Coupure dans la fenêtre [fin TAB, début finale estimé[
+      // OU dont l'heure est <= fin TAB mais pas encore insérée
+      // (pause à 12h00 alors que le TAB commence à 12h00 et finit à 12h15)
+      if(brkMin >= lastPoolEndMin - tabDurMin && brkMin <= startMin){
         appliedBreaksReliable.add(key);
         const fmt = mins => { const hh=Math.floor(mins/60)%24, mm=mins%60; return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'); };
-        const endMin = startMin + brk.duration;
-        transitionBreaks.push({ afterSlot: ST.poolTabSlot?ST.poolTabSlot.slot:-1, startTime: fmt(startMin), endTime: fmt(endMin), label: brk.label||'Coupure', duration: brk.duration });
-        start = fmt(endMin);
+        const pauseStart = Math.max(startMin, lastPoolEndMin + (brkMin < lastPoolEndMin ? cfg.tt : 0));
+        const endMin = pauseStart + brk.duration;
+        transitionBreaks.push({ afterSlot: ST.poolTabSlot?ST.poolTabSlot.slot:-1, startTime: fmt(pauseStart), endTime: fmt(endMin), label: brk.label||'Coupure', duration: brk.duration });
+        start = addMinutes(fmt(pauseStart), brk.duration);
         scanning = true;
         break;
       }
@@ -1088,10 +1077,8 @@ window.generateBracket = function(){
   slotDurations.push(matchSlotDur);
   slotIdx++;
 
-  // créneau TAB final (pour la finale elle-même, en cas d'égalité).
-  tabSlots.push({ round: 3, slot: slotIdx, label:'T.A.B. — Finale' });
-  slotDurations.push(tabDur);
-  slotIdx++;
+  // Pas de créneau TAB après la finale : le bouton "Classement final" prend
+  // le relais directement depuis la vue "Classement final" du tour 3.
 
   const totalSlots = slotIdx;
   // (Les coupures déjà consommées pendant les poules, et celle éventuelle de
@@ -2160,10 +2147,27 @@ function renderBracketView(){
         return block;
       }).join('');
       listEl.innerHTML = html;
+      appendFinalRankingBtn();
     }
   }
 }
 window.setBracketRound = function(r){ ST.activeBracketRound=r; renderBracketView(); };
+
+// Bouton "Classement final" affiché en bas du tour 3 quand tous les matchs sont joués
+function appendFinalRankingBtn(){
+  if(ST.activeBracketRound!==3) return;
+  const listEl = document.getElementById('bracketMatchList'); if(!listEl) return;
+  const round3 = ST.bracketSchedule.filter(b=>b.round===3);
+  if(!round3.length) return;
+  const allDone = round3.every(b=>bracketMatchWinner(b.m)!=null);
+  // Affiche le bouton même si le tournoi n'est pas terminé (partiel), en grisé
+  const btn = document.createElement('div');
+  btn.style.cssText = 'margin-top:14px;text-align:center';
+  btn.innerHTML = `<button onclick="goTo(5)" style="padding:12px 28px;font-size:16px;font-family:'Oswald',sans-serif;font-weight:700;background:${allDone?'var(--grn)':'var(--dim)'};color:#fff;border:none;border-radius:10px;cursor:pointer;width:100%">
+    🏆 ${allDone ? 'Voir le classement final' : 'Classement final (partiel)'}
+  </button>`;
+  listEl.appendChild(btn);
+}
 
 // ── Carte de match (saisie score) ────────────────────────
 const _scoreDebounce = {}; // { 'type_matchId': timeoutId }
