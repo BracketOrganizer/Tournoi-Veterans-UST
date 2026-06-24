@@ -964,55 +964,53 @@ window.generateBracket = function(){
   const matchSlotDur = cfg.matchDurBracket+cfg.tt;
   const tabDur = cfg.tabDuration||10;
 
-  // Départ de la phase finale = fin du TAB de poule + transition.
-  // lastPoolTime = heure de DÉBUT du TAB → on ajoute tabDuration pour avoir
-  // la fin du TAB, puis tt pour la transition.
   const tabDurMin = cfg.tabDuration||10;
+  const fmt = mins => { const hh=Math.floor(mins/60)%24, mm=mins%60; return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'); };
+
+  // heure de début du TAB de poule (dernier créneau des poules)
   const lastPoolTime = ST.poolTabSlot ? ST.poolTabSlot.time
     : (ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length-1].time : cfg.start);
-  // fin réelle du dernier créneau de poules (fin du TAB)
+  // fin réelle du TAB de poule
   const lastPoolEndMin = timeToMinutes(lastPoolTime) + tabDurMin;
+  // début "naturel" de la finale = fin TAB + transition
+  const naturalStartMin = lastPoolEndMin + cfg.tt;
 
   // Coupures réellement insérées pendant les poules = source de vérité.
-  // On reconstruit la clé time_duration depuis cfg.breaks en comparant
-  // durée + label (les seuls champs conservés dans poolBreaks).
+  // On compare par durée + label (les seuls champs fiables dans poolBreaks).
   const appliedBreaksReliable = new Set();
   (ST.poolBreaks||[]).forEach(pb=>{
-    const matched = (cfg.breaks||[]).find(c=>c.duration===pb.duration && (c.label||'Coupure')===(pb.label||'Coupure'));
+    const matched = (cfg.breaks||[]).find(c=>
+      c.duration===pb.duration && (c.label||'Coupure')===(pb.label||'Coupure'));
     if(matched) appliedBreaksReliable.add(matched.time+'_'+matched.duration);
   });
 
-  // Fenêtre de transition : coupures dont l'heure tombe entre la fin du TAB
-  // et le début estimé de la finale. On les insère ici en décalant start.
-  // La borne basse est lastPoolEndMin (fin TAB), pas lastPoolTime (début TAB)
-  // — correction du bug : une pause à 12h00 avec TAB débutant à 12h00 mais
-  // se terminant à 12h15 doit être détectée dans cette fenêtre.
-  let start = addMinutes(lastPoolTime, tabDurMin + cfg.tt);
+  // Insertion des pauses de transition : toute pause NON encore appliquée
+  // dont l'heure configurée est AVANT le début naturel de la finale.
+  // On part de naturalStartMin et on insère chaque pause chronologiquement,
+  // en décalant le curseur. Peu importe que brkMin soit avant ou après
+  // lastPoolEndMin : si elle n'est pas dans poolBreaks, elle n'a pas été
+  // insérée, et doit donc l'être ici.
+  let startMin = naturalStartMin;
   const transitionBreaks = [];
-  let scanning = true;
-  while(scanning){
-    scanning = false;
-    const startMin = timeToMinutes(start);
-    const pending = (cfg.breaks||[]).slice().sort((a,b)=>timeToMinutes(a.time)-timeToMinutes(b.time));
-    for(const brk of pending){
-      const key = brk.time+'_'+brk.duration;
-      if(appliedBreaksReliable.has(key)) continue;
-      const brkMin = timeToMinutes(brk.time);
-      // Coupure dans la fenêtre [fin TAB, début finale estimé[
-      // OU dont l'heure est <= fin TAB mais pas encore insérée
-      // (pause à 12h00 alors que le TAB commence à 12h00 et finit à 12h15)
-      if(brkMin >= lastPoolEndMin - tabDurMin && brkMin <= startMin){
-        appliedBreaksReliable.add(key);
-        const fmt = mins => { const hh=Math.floor(mins/60)%24, mm=mins%60; return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'); };
-        const pauseStart = Math.max(startMin, lastPoolEndMin + (brkMin < lastPoolEndMin ? cfg.tt : 0));
-        const endMin = pauseStart + brk.duration;
-        transitionBreaks.push({ afterSlot: ST.poolTabSlot?ST.poolTabSlot.slot:-1, startTime: fmt(pauseStart), endTime: fmt(endMin), label: brk.label||'Coupure', duration: brk.duration });
-        start = addMinutes(fmt(pauseStart), brk.duration);
-        scanning = true;
-        break;
-      }
+  const pending = (cfg.breaks||[]).slice().sort((a,b)=>timeToMinutes(a.time)-timeToMinutes(b.time));
+  for(const brk of pending){
+    const key = brk.time+'_'+brk.duration;
+    if(appliedBreaksReliable.has(key)) continue;
+    const brkMin = timeToMinutes(brk.time);
+    // La pause est éligible si elle était censée tomber avant (ou au moment de)
+    // la fin du TAB + transition — c'est-à-dire avant le début de la finale.
+    if(brkMin <= naturalStartMin){
+      appliedBreaksReliable.add(key);
+      const pauseEnd = startMin + brk.duration;
+      transitionBreaks.push({
+        afterSlot: ST.poolTabSlot ? ST.poolTabSlot.slot : -1,
+        startTime: fmt(startMin), endTime: fmt(pauseEnd),
+        label: brk.label||'Coupure', duration: brk.duration
+      });
+      startMin = pauseEnd;
     }
   }
+  let start = fmt(startMin);
   // Ces coupures de transition se rattachent visuellement à la fin des
   // poules (juste après le créneau T.A.B.) : on les ajoute à ST.poolBreaks
   // pour qu'elles s'affichent au même endroit que les autres coupures de
