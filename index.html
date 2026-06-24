@@ -975,6 +975,18 @@ window.generateBracket = function(){
   // début "naturel" de la finale = fin TAB + transition
   const naturalStartMin = lastPoolEndMin + cfg.tt;
 
+  // ── DEBUG (à supprimer après validation) ──────────────────────────────
+  console.log('=== generateBracket DEBUG ===');
+  console.log('cfg.breaks:', JSON.stringify(cfg.breaks));
+  console.log('cfg.tabDuration:', cfg.tabDuration, '→ tabDurMin:', tabDurMin);
+  console.log('cfg.tt:', cfg.tt);
+  console.log('ST.poolTabSlot:', JSON.stringify(ST.poolTabSlot));
+  console.log('lastPoolTime:', lastPoolTime);
+  console.log('lastPoolEndMin:', fmt(lastPoolEndMin));
+  console.log('naturalStartMin:', fmt(naturalStartMin));
+  console.log('ST.poolBreaks:', JSON.stringify(ST.poolBreaks));
+  // ─────────────────────────────────────────────────────────────────────
+
   // Coupures réellement insérées pendant les poules = source de vérité.
   // On compare par durée + label (les seuls champs fiables dans poolBreaks).
   const appliedBreaksReliable = new Set();
@@ -1011,6 +1023,11 @@ window.generateBracket = function(){
     }
   }
   let start = fmt(startMin);
+  // ── DEBUG ──
+  console.log('appliedBreaksReliable:', [...appliedBreaksReliable]);
+  console.log('transitionBreaks:', JSON.stringify(transitionBreaks));
+  console.log('start finale:', start);
+  // ──────────
   // Ces coupures de transition se rattachent visuellement à la fin des
   // poules (juste après le créneau T.A.B.) : on les ajoute à ST.poolBreaks
   // pour qu'elles s'affichent au même endroit que les autres coupures de
