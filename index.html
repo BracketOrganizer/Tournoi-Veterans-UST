@@ -2414,18 +2414,17 @@ const TV_PAGE_SIZE = 12; // nombre maximum de matchs affichés sur un même écr
 function getTVScreens(){
   const screens = [];
   if(ST.phase==='pools'){
+    // Tous les matchs de poules sur UN seul écran qui défile (auto-scroll
+    // déjà géré par startTVAutoScroll) — pas de pagination ici. La mise en
+    // valeur des matchs en cours (jusqu'à 4, un par terrain) fonctionne
+    // exactement comme avant.
     const poolMatches = tvAllMatchesFlat().filter(m=>m.type==='pool').sort((a,b)=>a.slot-b.slot||a.court-b.court);
     const isLiveNow = (ST.activeView==='pools' && typeof ST.activePoolRound==='number')
       ? (m=>m.slot===ST.activePoolRound) : (()=>false);
-    const pageCount = Math.max(1, Math.ceil(poolMatches.length/TV_PAGE_SIZE));
-    for(let i=0;i<pageCount;i++){
-      const page = poolMatches.slice(i*TV_PAGE_SIZE,(i+1)*TV_PAGE_SIZE);
-      screens.push({
-        key:'pool-'+i, kind:'matches',
-        title: pageCount>1 ? `⚽ Matchs de Poules (${i+1}/${pageCount})` : '⚽ Matchs de Poules',
-        render: ()=>tvMatchGridHTML(page, isLiveNow)
-      });
-    }
+    screens.push({
+      key:'pool-results', kind:'matches', title:'⚽ Matchs de Poules',
+      render: ()=>tvMatchGridHTML(poolMatches, isLiveNow)
+    });
     screens.push({ key:'pool-std', kind:'standings', title:'📊 Classement des Poules', render: tvStandingsPoolsHTML });
   } else {
     // Phase finale (bracket en cours ou terminé) : on ne montre plus du
