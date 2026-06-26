@@ -2292,14 +2292,30 @@ function updateTVClock(){
 // Quand il y a trop de matchs/lignes pour tenir sur l'écran, on fait défiler
 // la zone de contenu vers le bas tout seul (pas de souris/clavier sur la TV),
 // avec une petite pause en haut et en bas pour laisser le temps de lire.
-// Cycle : pause en haut (2,5s) → défilement lent vers le bas → pause en bas
-// (2,5s) → retour instantané en haut → on recommence. Ne fait rien si le
-// contenu tient déjà entièrement dans l'écran.
+// Cycle : pause sur la ligne "en cours" (2,5s) → défilement lent vers le bas
+// → pause en bas (2,5s) → retour au tout début → on recommence (pour quand
+// même montrer tous les matchs). Ne fait rien si le contenu tient déjà
+// entièrement dans l'écran.
 let tvScrollState = { phase:'pausedTop', since:0 };
 function startTVAutoScroll(){
   stopTVAutoScroll();
   const el = document.getElementById('tvContent'); if(!el) return;
-  el.scrollTop = 0;
+  const maxScrollInit = el.scrollHeight - el.clientHeight;
+
+  // Point de départ : la ligne du/des match(s) "en cours" si elle existe,
+  // sinon le tout début. On utilise getBoundingClientRect (et non offsetTop)
+  // pour rester fiable quelle que soit la chaîne d'ancêtres positionnés.
+  let startPos = 0;
+  if(maxScrollInit > 6){
+    const liveEl = el.querySelector('.tv-match-live');
+    if(liveEl){
+      const elRect = el.getBoundingClientRect();
+      const liveRect = liveEl.getBoundingClientRect();
+      const relativeTop = (liveRect.top - elRect.top) + el.scrollTop;
+      startPos = Math.max(0, Math.min(relativeTop - 16, maxScrollInit));
+    }
+  }
+  el.scrollTop = startPos;
   tvScrollState = { phase:'pausedTop', since: Date.now() };
   if(getTVSettings().scroll === false) return; // défilement désactivé par l'opérateur
   const SPEED = 0.7;   // px par tick (≈23 px/s) — lent, pensé pour être lisible
@@ -2315,7 +2331,7 @@ function startTVAutoScroll(){
     }
     if(tvScrollState.phase==='pausedBottom'){
       if(now - tvScrollState.since >= PAUSE_MS){
-        el.scrollTop = 0;
+        el.scrollTop = 0; // on repart du tout début pour finir par montrer l'ensemble des matchs
         tvScrollState = { phase:'pausedTop', since: now };
       }
       return;
@@ -2454,14 +2470,35 @@ function getTVScreens(){
   }
   return screens;
 }
+// Un tour de la finale est-il entièrement joué (tous ses matchs ont un score) ?
+function tvIsBracketRoundDone(round){
+  const matches = (ST.bracketSchedule||[]).filter(b=>b.round===round);
+  if(!matches.length) return true; // tour inexistant → on considère qu'il n'y a rien à attendre, on passe au suivant
+  return matches.every(b=>{ const r=getBracketResult(b.m); return r.ga!==''&&r.gb!==''; });
+}
 // Applique le filtre du réglage "Affichage" (Résultats / Classement / Alterné)
 // à la liste d'écrans de la phase en cours.
+// Pendant la phase finale, en plus de ce filtre, on ne montre QUE le tour en
+// cours tant qu'il n'est pas terminé (pas de minuteur qui ferait sauter à un
+// tour pas encore joué) : on reste sur Tour 1 jusqu'à la fin de ses
+// résultats, puis Tour 2, puis on alterne Tour Classement et Classement
+// Final une fois les deux premiers tours bouclés.
 function getActiveTVScreens(){
   const screens = getTVScreens();
   const cfg = getTVSettings();
-  if(cfg.mode==='results')   return screens.filter(s=>s.kind==='matches');
   if(cfg.mode==='standings') return screens.filter(s=>s.kind==='standings');
-  return screens; // 'cycle' = tout, dans l'ordre (Tour 1 → Tour 2 → Tour Classement → Classement final)
+
+  if(ST.phase!=='pools'){
+    let relevant;
+    if(!tvIsBracketRoundDone(1))      relevant = screens.filter(s=>s.key.startsWith('bracket-r1'));
+    else if(!tvIsBracketRoundDone(2)) relevant = screens.filter(s=>s.key.startsWith('bracket-r2'));
+    else                                relevant = screens.filter(s=>s.key.startsWith('bracket-r3') || s.kind==='standings');
+    if(!relevant.length) relevant = screens; // sécurité si jamais rien ne correspond
+    return cfg.mode==='results' ? relevant.filter(s=>s.kind==='matches') : relevant;
+  }
+
+  if(cfg.mode==='results') return screens.filter(s=>s.kind==='matches');
+  return screens; // poules, mode 'cycle' : Matchs de Poules ↔ Classement des Poules
 }
 function tvStandingsPoolsHTML(){
   return `<div class="tv-pools-grid">` + ['A','B','C','D'].map(p=>{
@@ -2490,6 +2527,7 @@ function tvFinalRankingHTML(){
     </tr>`).join('')}</tbody>
   </table>`;
 }
+let tvLastScreensSig = null; // signature de la dernière liste d'écrans actifs, pour détecter un changement de groupe (ex: Tour 1 → Tour 2) et repartir au début
 function renderTVContent(){
   const el=document.getElementById('tvContent'); if(!el) return;
   const phaseEl=document.getElementById('tvPhaseBadge');
@@ -2500,6 +2538,8 @@ function renderTVContent(){
   if(ST.phase !== tvLastPhase){ tvLastPhase = ST.phase; tvScreenIndex = 0; }
 
   const screens = getActiveTVScreens();
+  const sig = screens.map(s=>s.key).join('|');
+  if(sig !== tvLastScreensSig){ tvLastScreensSig = sig; tvScreenIndex = 0; } // ex: Tour 1 terminé → on bascule sur Tour 2 dès le 1er rendu
   if(tvScreenIndex >= screens.length) tvScreenIndex = 0;
   const screen = screens[tvScreenIndex];
   const subEl=document.getElementById('tvSubTitle');
@@ -2511,7 +2551,10 @@ function renderTVContent(){
     if(subEl) subEl.textContent = screen.title;
     el.innerHTML = screen.render();
   }
-  startTVAutoScroll();
+  // requestAnimationFrame : on attend que la mise en page du nouveau contenu
+  // soit posée avant de calculer la position de la ligne "en cours" (sinon,
+  // sur un changement d'écran, la mesure peut être prise un cran trop tôt).
+  requestAnimationFrame(startTVAutoScroll);
 }
 
 // ── Carte de match (saisie score) ────────────────────────
